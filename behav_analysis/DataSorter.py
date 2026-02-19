@@ -110,23 +110,35 @@ def filter_trials(
         keep &= stim_filters
 
     # --- include by trial_outcome code ---
-    # Your reliable mapping given:
-    # 5=Autoreward, 6=Premature LickAbort, 7=2AFC correct, 8=2AFC incorrect, 9=2AFC NoLick
-    # GNG correct/incorrect are 1-4 but mapping is task-specific; here we provide a pragmatic default.
     if include is not None:
         include = [str(x).strip().lower() for x in include]
-        outcome = pd.to_numeric(df.get("trial_outcome", pd.NA), errors="coerce")
+
+        # find the outcome column (your data often has TrOutcome)
+        outcome_col = next((c for c in ["trial_outcome", "TrOutcome", "TrialOutcome"] if c in df.columns), None)
+        if outcome_col is None:
+            raise KeyError(
+                "Could not find trial outcome column. Expected one of: "
+                "['trial_outcome', 'TrOutcome', 'TrialOutcome'].\n"
+                f"Available columns include: {list(df.columns)[:30]} ..."
+            )
+
+        outcome = pd.to_numeric(df[outcome_col], errors="coerce")  # <-- guaranteed Series
 
         allowed = pd.Series(False, index=df.index)
 
+        # Your reliable mapping:
+        # 5=Autoreward, 6=Premature LickAbort, 7=2AFC correct, 8=2AFC incorrect, 9=2AFC NoLick
         if "autoreward" in include:
             allowed |= (outcome == 5)
-        if "premature" in include or "prematurelicks" in include:
+        if "premature" in include:
             allowed |= (outcome == 6)
         if "correct" in include:
-            allowed |= outcome.isin([1, 2, 3, 4, 7])
+            # NOTE: for 2AFC this is definitely 7; GNG (1-4) mapping depends on your convention
+            allowed |= outcome.isin([7, 1, 2, 3, 4])
         if "incorrect" in include:
             allowed |= outcome.isin([8])
+        if "nolick" in include:
+            allowed |= outcome.isin([9])
 
         keep &= allowed
 
