@@ -14,15 +14,16 @@ def filter_trials_gng(
     n_elem_max: int | None = None,
     use_NoGo: bool = False,
     # ---- date filters (mmddyy inside SessionBase) ----
-    date_min: str | None = None,   # "mmddyy" e.g. "011626"
-    date_max: str | None = None,   # "mmddyy"
-    # ---- behavioral outcome (NEW codes 1..6) ----
+    date_min: str | None = None,
+    date_max: str | None = None,
+    # ---- behavioral outcome ----
     outcomes: list[int | str] | None = None,
-    outcome_col: str | None = None,   # default: "Outcome_GNG_Code" if present
+    outcome_col: str | None = None,
     # ---- RT filters ----
     rt_min: float | None = None,
     rt_max: float | None = None,
     rt_col: str = "RT_ms",
+    rt_include_nan: bool = False,   # <-- NEW: True = keep trials with no RT alongside the rt_min/max window
     # ---- ISI filters ----
     isi1_min: float | None = None,
     isi1_max: float | None = None,
@@ -171,15 +172,20 @@ def filter_trials_gng(
             raise KeyError(f"Missing column: {rt_col} (run add_reaction_time_columns first).")
 
         rt = pd.to_numeric(df[rt_col], errors="coerce")
-        rt_keep = rt.notna()
 
+        # trials with a valid RT that falls within [rt_min, rt_max]
+        rt_in_window = rt.notna()
         if rt_min is not None:
-            rt_keep &= rt >= float(rt_min)
+            rt_in_window &= rt >= float(rt_min)
         if rt_max is not None:
-            rt_keep &= rt <= float(rt_max)
+            rt_in_window &= rt <= float(rt_max)
 
-        # when RT filter is requested: require finite RT
-        keep &= rt_keep
+        if rt_include_nan:
+            # accept trials that are either in the RT window OR have no RT at all
+            keep &= rt_in_window | rt.isna()
+        else:
+            # original behaviour: require a finite RT within the window
+            keep &= rt_in_window
 
     # ---------------- ISI filtering (stim trials only) ----------------
     # (NoGo trials can still survive if use_NoGo=True; ISI constraints don't apply to them.)
