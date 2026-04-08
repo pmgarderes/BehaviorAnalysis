@@ -286,4 +286,7 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
     else:
         print("ℹ️  DRY_RUN = True — no files were touched. Set DRY_RUN = False to apply.")
 
+    # ── debug ─────────────────────────────────────────────────────
+    print(f"DEBUG plan_df type: {type(plan_df)}")
+    print(f"DEBUG issues_df type: {type(issues_df)}")
     return plan_df, issues_df
