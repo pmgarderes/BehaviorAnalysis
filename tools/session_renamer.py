@@ -257,7 +257,8 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
                 "issues"    : "  |  ".join(flags),
             })
 
-    issues_df = pd.DataFrame(issue_rows) if issue_rows else pd.DataFrame(
+    issues_df = pd.DataFrame(
+        issue_rows if issue_rows else [],
         columns=["file", "date_meta", "date_fname", "iter", "segment", "issues"]
     )
 
