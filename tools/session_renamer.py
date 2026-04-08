@@ -92,9 +92,19 @@ def _strip_type(stem: str) -> str:
 
 # ── Main entry point ──────────────────────────────────────────────
 def run():
-    """Read module-level settings and execute the rename pipeline."""
+    """
+    Read module-level settings and execute the rename pipeline.
+    Returns plan_df and issues_df so the caller can display them in Colab:
+
+        plan_df, issues_df = session_renamer.run()
+
+        with pd.option_context("display.max_rows", None):
+            display(plan_df)
+
+        display(issues_df)   # only flagged rows
+    """
     import session_renamer as _self
-    _run(
+    return _run(
         animal=_self.ANIMAL,
         mode=_self.MODE,
         local_dir=_self.LOCAL_DIR,
@@ -102,7 +112,7 @@ def run():
     )
 
 
-def _run(animal: str, mode: str, local_dir: str, dry_run: bool):
+def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     # ── 1. Resolve folder ─────────────────────────────────────────
     if mode == "colab":
@@ -212,6 +222,49 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool):
     print(f"\n{'[DRY RUN] ' if dry_run else ''}→ {n_changed} files will be renamed "
           f"out of {len(rename_plan)} total.\n")
 
+    # ── 5b. Issues table ──────────────────────────────────────────
+    # Flag 1: date mismatch
+    date_mismatch = set(
+        (r["date"], r["iteration"], r["segment"])
+        for r in rename_plan
+        if str(plan_df.loc[rename_plan.index(r), "date_match"]) != "1"
+    )
+
+    # Flag 2: sessions/segments with fewer than 4 file types
+    from collections import Counter
+    session_key = lambda r: (r["date"], r["iteration"], r["segment"])
+    type_counts = Counter(session_key(r) for r in rename_plan if r["file_type"] != "⚠️ unknown")
+    incomplete = {k for k, v in type_counts.items() if v < 4}
+
+    issue_rows = []
+    for r in rename_plan:
+        key = session_key(r)
+        flags = []
+        dm = plan_df.loc[rename_plan.index(r), "date_match"]
+        if str(dm) != "1":
+            flags.append(f"⚠️ date_match={dm}")
+        if key in incomplete:
+            flags.append(f"⚠️ only {type_counts[key]}/4 file types")
+        if flags:
+            issue_rows.append({
+                "file"      : r["old_name"],
+                "date_meta" : r["date_meta"].strftime("%Y-%m-%d"),
+                "date_fname": r["date_fname"].strftime("%Y-%m-%d") if r["date_fname"] else "❓",
+                "iter"      : r["iteration"],
+                "segment"   : r["segment"],
+                "issues"    : "  |  ".join(flags),
+            })
+
+    issues_df = pd.DataFrame(issue_rows) if issue_rows else pd.DataFrame(
+        columns=["file", "date_meta", "date_fname", "iter", "segment", "issues"]
+    )
+
+    if issue_rows:
+        print(f"⚠️  {len(set((r['iter'], r['segment'], r['date_meta']) for r in issue_rows))} "
+              f"session(s)/segment(s) with issues — inspect issues_df for details.")
+    else:
+        print("✅  No issues detected.")
+
     unknown = plan_df[plan_df["type"] == "⚠️ unknown"]
     if not unknown.empty:
         print(f"⚠️  {len(unknown)} file(s) have no recognised type suffix:")
@@ -234,3 +287,5 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool):
             print(f"\n✅  All {n_changed} files renamed successfully.")
     else:
         print("ℹ️  DRY_RUN = True — no files were touched. Set DRY_RUN = False to apply.")
+
+    return plan_df, issues_df
