@@ -104,12 +104,13 @@ def run():
         display(issues_df)   # only flagged rows
     """
     import session_renamer as _self
-    return _run(
+    plan_df, issues_df = _run(
         animal=_self.ANIMAL,
         mode=_self.MODE,
         local_dir=_self.LOCAL_DIR,
         dry_run=_self.DRY_RUN,
     )
+    return plan_df, issues_df
 
 
 def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
