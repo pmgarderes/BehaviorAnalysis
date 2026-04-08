@@ -221,15 +221,18 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
     print(f"\n{'[DRY RUN] ' if dry_run else ''}→ {n_changed} files will be renamed "
           f"out of {len(rename_plan)} total.\n")
 
-    # ── 5b. Issues table ──────────────────────────────────────────
-    # Flag 1: date mismatch
+    unknown = plan_df[plan_df["type"] == "⚠️ unknown"]
+    if not unknown.empty:
+        print(f"⚠️  {len(unknown)} file(s) have no recognised type suffix:")
+        print(unknown[["old_name"]].to_string(index=False))
+
+    # ── 6. Build issues table ─────────────────────────────────────
     date_mismatch = set(
         (r["date"], r["iteration"], r["segment"])
         for r in rename_plan
         if str(plan_df.loc[rename_plan.index(r), "date_match"]) != "1"
     )
 
-    # Flag 2: sessions/segments with fewer than 4 file types
     from collections import Counter
     session_key = lambda r: (r["date"], r["iteration"], r["segment"])
     type_counts = Counter(session_key(r) for r in rename_plan if r["file_type"] != "⚠️ unknown")
@@ -264,12 +267,7 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
     else:
         print("✅  No issues detected.")
 
-    unknown = plan_df[plan_df["type"] == "⚠️ unknown"]
-    if not unknown.empty:
-        print(f"⚠️  {len(unknown)} file(s) have no recognised type suffix:")
-        print(unknown[["old_name"]].to_string(index=False))
-
-    # ── 6. Execute renames ────────────────────────────────────────
+    # ── 7. Execute renames ────────────────────────────────────────
     if not dry_run:
         errors = []
         for r in rename_plan:
