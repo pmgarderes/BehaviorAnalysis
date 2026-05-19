@@ -88,7 +88,27 @@ def _strip_type(stem: str) -> str:
         if stem.lower().endswith(f"_{t}"):
             return stem[: -(len(t) + 1)]
     return stem
+    
+def _parse_perfect_name(stem: str, animal_tag: str) -> dict | None:
+    types = "|".join(sorted(KNOWN_TYPES))
+    pat = rf"^{re.escape(animal_tag)}_(\d{{6}})_(\d{{2}})_(S\d{{2}})_({types})$"
+    m = re.fullmatch(pat, stem, flags=re.IGNORECASE)
+    if not m:
+        return None
 
+    date_str, it, seg, ftype = m.groups()
+    try:
+        date_dt = datetime.strptime(date_str, "%m%d%y")
+    except ValueError:
+        return None
+
+    return {
+        "date_str": date_str,
+        "date_fname": date_dt,
+        "iteration": int(it),
+        "segment": seg.upper(),
+        "file_type": ftype.lower(),
+    }
 
 # ── Main entry point ──────────────────────────────────────────────
 def run():
@@ -120,7 +140,8 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
         DATA_FOLDER = Path("/content/drive/Shareddrives/BehaviorAnalysis_data") / animal
     else:
         DATA_FOLDER = Path(local_dir)
-
+    animal_tag = DATA_FOLDER.name   # safest: exact animal name from folder
+    
     assert DATA_FOLDER.is_dir(), f"Folder not found: {DATA_FOLDER}"
     print(f"📂  Scanning: {DATA_FOLDER}\n")
 
@@ -129,74 +150,109 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
     print(f"Found {len(csv_files)} CSV files.\n")
     if not csv_files:
         raise FileNotFoundError("No CSV files found — check DATA_FOLDER and ANIMAL.")
-
+    
     file_info = []
+    used_iters = defaultdict(set)
+    
     for fpath in csv_files:
-        stem      = fpath.stem
+        stem = fpath.stem
+        perfect = _parse_perfect_name(stem, animal_tag)
+    
+        if perfect:
+            used_iters[perfect["date_str"]].add(perfect["iteration"])
+            file_info.append({
+                "path"        : fpath,
+                "date_str"    : perfect["date_str"],
+                "date_meta"   : _get_mtime_pacific(fpath),
+                "date_fname"  : perfect["date_fname"],
+                "segment"     : perfect["segment"],
+                "file_type"   : perfect["file_type"],
+                "canonical"   : stem,
+                "iteration"   : perfect["iteration"],
+                "already_good": True,
+            })
+            continue
+    
         file_type = _extract_file_type(stem)
         base_stem = _strip_type(stem)
-        segment   = _extract_segment(base_stem)
-        date_dt   = _get_mtime_pacific(fpath)
-        date_str  = date_dt.strftime("%m%d%y")
+        segment   = _extract_segment(base_stem) or "S01"
+        date_meta = _get_mtime_pacific(fpath)
+        date_fname = _extract_date_from_stem(base_stem)
+    
+        # Prefer filename date if present; fallback to metadata only for raw/unlabeled files
+        date_str = date_fname.strftime("%m%d%y") if date_fname else date_meta.strftime("%m%d%y")
+    
         canonical = re.sub(r"_?S\d{1,2}$", "", base_stem, flags=re.IGNORECASE).strip("_")
-
+    
         file_info.append({
-            "path"      : fpath,
-            "date_str"  : date_str,
-            "date_meta" : date_dt,
-            "date_fname": _extract_date_from_stem(base_stem),
-            "segment"   : segment or "S01",
-            "file_type" : file_type,
-            "canonical" : canonical,
+            "path"        : fpath,
+            "date_str"    : date_str,
+            "date_meta"   : date_meta,
+            "date_fname"  : date_fname,
+            "segment"     : segment,
+            "file_type"   : file_type,
+            "canonical"   : canonical,
+            "iteration"   : None,
+            "already_good": False,
         })
-
-    # ── 3. Assign iteration numbers per date ──────────────────────
-    date_to_canonicals: dict[str, list[str]] = defaultdict(list)
+    
+    # ── 3. Assign iteration numbers only for non-protected files ───
+    date_to_canonicals = defaultdict(list)
     seen = set()
+    
     for info in file_info:
+        if info["already_good"]:
+            continue
         key = (info["date_str"], info["canonical"])
         if key not in seen:
             date_to_canonicals[info["date_str"]].append(info["canonical"])
             seen.add(key)
-
-    for d in date_to_canonicals:
-        date_to_canonicals[d].sort()
-
-    iteration_map = {
-        (date_str, canonical): idx
-        for date_str, canonicals in date_to_canonicals.items()
-        for idx, canonical in enumerate(canonicals, start=1)
-    }
-
+    
+    iteration_map = {}
+    
+    for date_str, canonicals in date_to_canonicals.items():
+        used = set(used_iters[date_str])
+        it = 1
+    
+        for canonical in sorted(canonicals):
+            while it in used:
+                it += 1
+            iteration_map[(date_str, canonical)] = it
+            used.add(it)
+            it += 1
+    
     # ── 4. Build rename plan ──────────────────────────────────────
     rename_plan = []
+    
     for info in file_info:
-        date_str  = info["date_str"]
-        canonical = info["canonical"]
-        segment   = info["segment"]
-        ftype     = info["file_type"]
-        iteration = iteration_map[(date_str, canonical)]
-
-        new_stem = f"{animal}_{date_str}_{iteration:02d}_{segment}"
-        if ftype:
-            new_stem = f"{new_stem}_{ftype}"
-
         old_path = info["path"]
-        new_name = f"{new_stem}.csv"
+    
+        if info["already_good"]:
+            new_name = old_path.name
+            iteration = info["iteration"]
+            protected = True
+        else:
+            iteration = iteration_map[(info["date_str"], info["canonical"])]
+            new_stem = f"{animal_tag}_{info['date_str']}_{iteration:02d}_{info['segment']}"
+            if info["file_type"]:
+                new_stem = f"{new_stem}_{info['file_type']}"
+            new_name = f"{new_stem}.csv"
+            protected = False
+    
         rename_plan.append({
-            "old_name"  : old_path.name,
-            "new_name"  : new_name,
-            "file_type" : ftype or "⚠️ unknown",
-            "segment"   : segment,
-            "iteration" : iteration,
-            "date"      : date_str,
-            "date_meta" : info["date_meta"],
-            "date_fname": info["date_fname"],
-            "changed"   : old_path.name != new_name,
-            "old_path"  : old_path,
-            "new_path"  : old_path.parent / new_name,
+            "old_name"    : old_path.name,
+            "new_name"    : new_name,
+            "file_type"   : info["file_type"] or "⚠️ unknown",
+            "segment"     : info["segment"],
+            "iteration"   : iteration,
+            "date"        : info["date_str"],
+            "date_meta"   : info["date_meta"],
+            "date_fname"  : info["date_fname"],
+            "protected"   : protected,
+            "changed"     : (old_path.name != new_name) and not protected,
+            "old_path"    : old_path,
+            "new_path"    : old_path.parent / new_name,
         })
-
     # ── 5. Preview table ──────────────────────────────────────────
     plan_df = pd.DataFrame([{
         "old_name"     : r["old_name"],
@@ -204,11 +260,12 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
         "type"         : r["file_type"],
         "date_meta"    : r["date_meta"].strftime("%Y-%m-%d"),
         "date_filename": r["date_fname"].strftime("%Y-%m-%d") if r["date_fname"] else "❓ not found",
-        "date_match"   : (1 if r["date_fname"] and r["date_meta"].date() == r["date_fname"].date() else 0)
-                          if r["date_fname"] else "❓",
+        "date_match": "🔒 name trusted" if r["protected"] else (
+            1 if r["date_fname"] and r["date_meta"].date() == r["date_fname"].date() else 0
+        ) if r["date_fname"] else "❓",
         "iter"         : r["iteration"],
         "segment"      : r["segment"],
-        "status"       : "✏️  rename" if r["changed"] else "✅ ok",
+        "status": "🔒 already renamed" if r["protected"] else ("✏️  rename" if r["changed"] else "✅ ok"),
     } for r in rename_plan])
 
     try:
@@ -243,6 +300,8 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
         key = session_key(r)
         flags = []
         dm = plan_df.loc[rename_plan.index(r), "date_match"]
+        if (not r["protected"]) and str(dm) != "1":
+            flags.append(f"⚠️ date_match={dm}")
         if str(dm) != "1":
             flags.append(f"⚠️ date_match={dm}")
         if key in incomplete:
