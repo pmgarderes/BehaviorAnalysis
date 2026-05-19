@@ -284,12 +284,6 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
         print(unknown[["old_name"]].to_string(index=False))
 
     # ── 6. Build issues table ─────────────────────────────────────
-    date_mismatch = set(
-        (r["date"], r["iteration"], r["segment"])
-        for r in rename_plan
-        if str(plan_df.loc[rename_plan.index(r), "date_match"]) != "1"
-    )
-
     from collections import Counter
     session_key = lambda r: (r["date"], r["iteration"], r["segment"])
     type_counts = Counter(session_key(r) for r in rename_plan if r["file_type"] != "⚠️ unknown")
@@ -301,8 +295,6 @@ def _run(animal: str, mode: str, local_dir: str, dry_run: bool) -> tuple[pd.Data
         flags = []
         dm = plan_df.loc[rename_plan.index(r), "date_match"]
         if (not r["protected"]) and str(dm) != "1":
-            flags.append(f"⚠️ date_match={dm}")
-        if str(dm) != "1":
             flags.append(f"⚠️ date_match={dm}")
         if key in incomplete:
             flags.append(f"⚠️ only {type_counts[key]}/4 file types")
