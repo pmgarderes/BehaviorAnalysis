@@ -12,6 +12,8 @@ def filter_trials_2afc(
     n_elem_max: int | None = None,
     date_min: str | None = None,   # "mmddyy" e.g. "011626"
     date_max: str | None = None,   # "mmddyy"
+    session_base: str | list[str] | None = None,  # exact SessionBase name(s)
+    session_base_col: str = "SessionBase",
     include: list[str] | None = None,  # ["autoreward","premature","correct","incorrect","nolick"]
     arduino_mode: int | str | list[int | str] | None = None,
     arduino_mode_col: str = "ArduinoMode",
@@ -22,16 +24,18 @@ def filter_trials_2afc(
 
     Filters:
       - strength_min/max on SE_strength
-      - n_elem_min/max on number of DISTINCT stimulated elements (from SE_StimElem)
+      - n_elem_min/max on number of DISTINCT stimulated elements from SE_StimElem
       - date_min/date_max by date parsed from SessionBase as mmddyy, e.g. "..._011626_..."
-      - arduino_mode: keep only rows where ArduinoMode matches (single value or list)
-      - include: whitelist by TrOutcome codes (2AFC)
+      - session_base: keep only rows matching one SessionBase, or a list of SessionBase names
+      - arduino_mode: keep only rows where ArduinoMode matches one value or a list
+      - include: whitelist by TrOutcome codes, 2AFC:
           "autoreward" -> 5
           "premature"  -> 6
           "correct"    -> 7
           "incorrect"  -> 8
           "nolick"     -> 9
     """
+
     df = trial_data.copy()
 
     # --- helpers ---
@@ -52,27 +56,48 @@ def filter_trials_2afc(
         return _parse_mmddyy(m.group(1))
 
     # --- compute basics ---
-    se_strength = pd.to_numeric(df.get("SE_strength", 0), errors="coerce").fillna(0.0)
+    se_strength = pd.to_numeric(
+        df.get("SE_strength", 0),
+        errors="coerce"
+    ).fillna(0.0)
 
-    # N distinct stimulated elements
+    # Number of distinct stimulated elements
     if "SE_StimElem" in df.columns:
         def _n_distinct(x):
             if not isinstance(x, (list, tuple)):
                 return 0
             vals = [v for v in x if v is not None and pd.notna(v)]
             return len(set(vals))
+
         n_elem = df["SE_StimElem"].apply(_n_distinct)
     else:
         n_elem = pd.Series(0, index=df.index)
 
     keep = pd.Series(True, index=df.index)
 
+    # --- SessionBase filtering ---
+    if session_base is not None:
+        if session_base_col not in df.columns:
+            raise KeyError(f"Missing column: {session_base_col}")
+
+        sb = df[session_base_col].astype(str)
+
+        if isinstance(session_base, (list, tuple, set)):
+            allowed_sessions = set(str(x) for x in session_base)
+            keep &= sb.isin(allowed_sessions)
+        else:
+            keep &= sb == str(session_base)
+
     # --- date filtering ---
     if date_min is not None or date_max is not None:
-        if "SessionBase" not in df.columns:
-            raise KeyError("Missing column: SessionBase (needed for date filters).")
+        if session_base_col not in df.columns:
+            raise KeyError(
+                f"Missing column: {session_base_col} "
+                "(needed for date filters)."
+            )
 
-        sess_date = df["SessionBase"].apply(_extract_date_from_base)
+        sess_date = df[session_base_col].apply(_extract_date_from_base)
+
         dmin = _parse_mmddyy(date_min) if date_min is not None else pd.NaT
         dmax = _parse_mmddyy(date_max) if date_max is not None else pd.NaT
 
@@ -89,12 +114,14 @@ def filter_trials_2afc(
     # --- strength filtering ---
     if strength_min is not None:
         keep &= se_strength >= float(strength_min)
+
     if strength_max is not None:
         keep &= se_strength <= float(strength_max)
 
     # --- n-elem filtering ---
     if n_elem_min is not None:
         keep &= n_elem >= int(n_elem_min)
+
     if n_elem_max is not None:
         keep &= n_elem <= int(n_elem_max)
 
@@ -105,17 +132,19 @@ def filter_trials_2afc(
 
         am = df[arduino_mode_col]
 
-        # Allow numeric or string matching; list allowed
         if isinstance(arduino_mode, (list, tuple, set)):
             allowed_modes = set(str(x) for x in arduino_mode)
             keep &= am.astype(str).isin(allowed_modes)
         else:
             keep &= am.astype(str) == str(arduino_mode)
 
-    # --- include by TrOutcome (2AFC codes only) ---
+    # --- include by TrOutcome, 2AFC codes only ---
     if include is not None:
         if outcome_col not in df.columns:
-            raise KeyError(f"Missing outcome column: {outcome_col} (expected for 2AFC).")
+            raise KeyError(
+                f"Missing outcome column: {outcome_col} "
+                "(expected for 2AFC)."
+            )
 
         include = [str(x).strip().lower() for x in include]
         outcome = pd.to_numeric(df[outcome_col], errors="coerce")
@@ -123,15 +152,15 @@ def filter_trials_2afc(
         allowed = pd.Series(False, index=df.index)
 
         if "autoreward" in include:
-            allowed |= (outcome == 5)
+            allowed |= outcome == 5
         if "premature" in include:
-            allowed |= (outcome == 6)
+            allowed |= outcome == 6
         if "correct" in include:
-            allowed |= (outcome == 7)
+            allowed |= outcome == 7
         if "incorrect" in include:
-            allowed |= (outcome == 8)
+            allowed |= outcome == 8
         if "nolick" in include:
-            allowed |= (outcome == 9)
+            allowed |= outcome == 9
 
         keep &= allowed
 
